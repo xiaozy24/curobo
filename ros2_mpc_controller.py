@@ -5,6 +5,13 @@ ROS2 MPC Controller - Integrates curobo MPC with dual Panda teleop interface.
 This node provides a baseline controller using curobo's MPC for comparison
 with the dualarm_mprc safe controller.
 
+Robot Configuration:
+- Uses dual_franka_ros2.yml which matches the ROS2 simulation setup
+- Base link: base_link
+- Left arm: mj_left_* (positioned at y=+0.26m, no rotation)
+- Right arm: mj_right_* (positioned at y=-0.26m, no rotation)
+- Tool frames: mj_left_hand_tcp, mj_right_hand_tcp
+
 Interface:
 - Subscribes: /joint_states (current joint positions)
 - Subscribes: /dualarm_teleop_cmd (teleop commands, compatible with csv_teleop_cartesian_absolute.py)
@@ -64,39 +71,26 @@ def quat_rotate_vector(q, v):
 class ROS2MPCController(Node):
     """ROS2 node that wraps curobo MPC for dual Panda control."""
 
-    # ROS2 joint names (from /joint_states topic - matches simulation)
+    # Joint names (same for ROS2 and curobo - matching simulation)
     LEFT_JOINT_PREFIX = "mj_left_joint"
     RIGHT_JOINT_PREFIX = "mj_right_joint"
-    ROS_JOINT_NAMES = (
+    JOINT_NAMES = (
         "mj_left_joint1", "mj_left_joint2", "mj_left_joint3", "mj_left_joint4",
         "mj_left_joint5", "mj_left_joint6", "mj_left_joint7",
         "mj_right_joint1", "mj_right_joint2", "mj_right_joint3", "mj_right_joint4",
         "mj_right_joint5", "mj_right_joint6", "mj_right_joint7",
     )
 
-    # curobo joint names (internal - from robot config)
-    CUROBO_LEFT_PREFIX = "panda_left_joint"
-    CUROBO_RIGHT_PREFIX = "panda_right_joint"
-    CUROBO_JOINT_NAMES = (
-        "panda_left_joint1", "panda_left_joint2", "panda_left_joint3", "panda_left_joint4",
-        "panda_left_joint5", "panda_left_joint6", "panda_left_joint7",
-        "panda_right_joint1", "panda_right_joint2", "panda_right_joint3", "panda_right_joint4",
-        "panda_right_joint5", "panda_right_joint6", "panda_right_joint7",
-    )
-
     # Tool frames (must match robot config)
-    LEFT_TOOL_FRAME = "panda_left_hand_tcp"
-    RIGHT_TOOL_FRAME = "panda_right_hand_tcp"
-
-    # Joint name mapping: ROS2 name -> curobo name
-    JOINT_NAME_MAP = {ros: curobo for ros, curobo in zip(ROS_JOINT_NAMES, CUROBO_JOINT_NAMES)}
+    LEFT_TOOL_FRAME = "mj_left_hand_tcp"
+    RIGHT_TOOL_FRAME = "mj_right_hand_tcp"
 
     # Command type constants (must match csv_teleop_cartesian_absolute.py)
     TASK_SPACE_POSE = 5
 
     def __init__(
         self,
-        robot_file: str = "dual_franka_with_camera.yml",
+        robot_file: str = "dual_franka_ros2.yml",
         scene_dict: Optional[dict] = None,
         optimization_dt: float = 0.025,
         cold_start_iters: int = 100,
@@ -765,7 +759,7 @@ class ROS2MPCController(Node):
 
 def main(args=None):
     parser = argparse.ArgumentParser(description='ROS2 MPC Controller with curobo')
-    parser.add_argument('--robot-file', type=str, default='dual_franka_with_camera.yml',
+    parser.add_argument('--robot-file', type=str, default='dual_franka_ros2.yml',
                         help='Robot configuration file')
     parser.add_argument('--optimization-dt', type=float, default=0.025,
                         help='Optimization timestep (seconds)')
