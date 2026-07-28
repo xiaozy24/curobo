@@ -27,15 +27,8 @@ def get_cuda_home() -> Optional[str]:
     Returns:
         Path to CUDA installation or None if not found
     """
-    # Try CUDA_PATH environment variable
-    cuda_home = os.environ.get("CUDA_PATH", "/usr/local/cuda")
-    if cuda_home and os.path.isdir(cuda_home):
-        return cuda_home
-    # Try standard system locations
-    for path in ["/usr/local/cuda", "/usr/cuda"]:
-        if os.path.isdir(path):
-            return path
-    return None
+    cuda_home = pathfinder.find_nvidia_header_directory("nvrtc")
+    return cuda_home
 
 
 
@@ -197,22 +190,11 @@ class CudaCoreKernelCache:
         include_paths = [str(inc) for inc in include_dirs]
 
         # Add CUDA system includes
-        # Try environment variable first, then fall back to standard paths
-        cuda_include = os.environ.get("CUDA_PATH", "/usr/local/cuda")
-        if cuda_include and os.path.isdir(cuda_include):
-            include_paths.append(os.path.join(cuda_include, "include"))
-        # Try nvidia-cuda-nvrtc package location
-        import sysconfig
-        nvrtc_include = os.path.join(sysconfig.get_path("include"), "nvrtc")
-        if os.path.isdir(nvrtc_include):
-            include_paths.append(nvrtc_include)
-        elif not cuda_include or not os.path.isdir(os.path.join(cuda_include, "include")):
-            # Log warning but don't fail - compilation might still work
-            import logging
-            logging.getLogger(__name__).warning(
-                "CUDA include directory not found, compilation may fail for system headers. "
-                "CUDA_PATH=%s, nvrtc_include=%s", cuda_include, nvrtc_include
-            )
+        cuda_include = pathfinder.find_nvidia_header_directory("nvrtc")
+        if os.path.isdir(cuda_include):
+            include_paths.append(cuda_include)
+        else:
+            log_and_raise("CUDA include directory not found, compilation may fail for system headers")
 
 
 
