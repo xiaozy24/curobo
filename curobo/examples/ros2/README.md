@@ -57,7 +57,7 @@ python3 src/multipanda_ros2/teleop/csv_teleop_cartesian_absolute.py --csv-file t
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `robot_config` | string | `dual_franka.yml` | Robot configuration file |
+| `robot_config` | string | `dual_franka_home.yml` | Robot configuration file (uses home position) |
 | `scene_config` | string | `collision_table.yml` | Scene configuration file |
 | `optimization_dt` | float | 0.025 | MPC time step (seconds) |
 | `interpolation_steps` | int | 4 | Interpolation steps |

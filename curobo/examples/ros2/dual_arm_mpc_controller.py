@@ -82,7 +82,7 @@ class DualArmMPCController(Node):
             raise RuntimeError("cuRobo not available")
 
         # Declare parameters
-        self.declare_parameter('robot_config', 'dual_franka.yml')
+        self.declare_parameter('robot_config', 'dual_franka_home.yml')
         self.declare_parameter('scene_config', 'collision_table.yml')
         self.declare_parameter('optimization_dt', 0.025)
         self.declare_parameter('interpolation_steps', 4)
@@ -116,7 +116,7 @@ class DualArmMPCController(Node):
         self.joint_states_received = False
         self.teleop_cmd_active = False
         self.last_teleop_time = None
-        self.teleop_timeout = 0.1  # 100ms timeout
+        self.teleop_timeout = 999.0  # 999s timeout (effectively no timeout)
 
         # Initialize MPC solver
         self.get_logger().info(f"Initializing MPC with robot={robot_config}, scene={scene_config}")
