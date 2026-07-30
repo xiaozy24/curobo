@@ -1,0 +1,22 @@
+## SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+## SPDX-License-Identifier: Apache-2.0
+##
+## My Task Scene Configuration
+##
+## Empty scene configuration for dual_panda_ws MPC integration.
+## Matches collision_env_my_task.yaml which has no static obstacles.
+##
+## To add obstacles, uncomment and configure the relevant sections below.
+##
+
+## Optional: Add table or ground plane
+#cuboid:
+#  table:
+#    dims: [1.4, 1.4, 0.05]  # x, y, z dimensions
+#    pose: [0.0, 0.0, -0.05, 1, 0, 0, 0]  # x, y, z, qx, qy, qz, qw
+
+## Optional: Add workspace obstacles
+#cuboid:
+#  obstacle_1:
+#    dims: [0.1, 0.1, 0.1]
+#    pose: [0.4, 0.0, 0.3, 1, 0, 0, 0]
