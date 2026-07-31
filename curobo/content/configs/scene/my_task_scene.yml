@@ -3,20 +3,14 @@
 ##
 ## My Task Scene Configuration
 ##
-## Empty scene configuration for dual_panda_ws MPC integration.
-## Matches collision_env_my_task.yaml which has no static obstacles.
-##
-## To add obstacles, uncomment and configure the relevant sections below.
+## Matches collision_env_my_task.yaml for dual_panda_ws MPC comparison.
+## Single box obstacle matching HQP controller environment.
 ##
 
-## Optional: Add table or ground plane
-#cuboid:
-#  table:
-#    dims: [1.4, 1.4, 0.05]  # x, y, z dimensions
-#    pose: [0.0, 0.0, -0.05, 1, 0, 0, 0]  # x, y, z, qx, qy, qz, qw
-
-## Optional: Add workspace obstacles
-#cuboid:
-#  obstacle_1:
-#    dims: [0.1, 0.1, 0.1]
-#    pose: [0.4, 0.0, 0.3, 1, 0, 0, 0]
+cuboid:
+  ## Box 01: Main obstacle
+  ## Corresponds to box_01 in collision_env_my_task.yaml
+  ## HQP: dimensions=[0.3, 0.4, 1.0], position=[0.700, 0.150, 0.500]
+  box_01:
+    dims: [0.3, 0.4, 1.0]  # x, y, z dimensions (matching HQP)
+    pose: [0.700, 0.150, 0.500, 1, 0, 0, 0]  # x, y, z, qw, qx, qy, qz (matching HQP)

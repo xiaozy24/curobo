@@ -43,7 +43,7 @@ rollout:
 
   constraint_cfg:
     scene_collision_cfg:
-      activation_distance: 0.03
+      activation_distance: 0.05
       use_speed_metric: true
       use_sweep: true
       use_sweep_kernel: true

@@ -248,6 +248,11 @@ class MPCControlNode(Node):
         self.mpc_initialized = False
         self.recording_enabled = record_data
 
+        # Failure tracking for robustness
+        self.mpc_failure_count = 0
+        self.max_consecutive_failures = 10  # 100ms = 10 control cycles
+        self.last_successful_commands = {'left': None, 'right': None}  # For hold mode
+
         # Data recorder
         self.recorder = DataRecorder(output_dir) if record_data else None
 
@@ -276,6 +281,7 @@ class MPCControlNode(Node):
             use_cuda_graph=True,
             optimization_dt=0.01,  # 10ms optimization timestep
             interpolation_steps=4,  # Must be 4 for MPC
+            optimizer_collision_activation_distance=0.05,  # 5cm collision activation distance
         )
 
         self.mpc = ModelPredictiveControl(config)
@@ -466,6 +472,7 @@ class MPCControlNode(Node):
         # Start recording on first control iteration
         if self.recorder and not self.recorder.recording:
             self.recorder.start()
+            self.get_logger().info(f'[MPC] Recording started, data will be saved to {self.recorder.base_path}_*.csv')
 
         # Update goals if new target is available
         if self.new_goal_available and self.goal_poses is not None:
@@ -475,8 +482,11 @@ class MPCControlNode(Node):
                     run_ik=False,
                 )
                 self.new_goal_available = False
+                self.mpc_failure_count = 0  # Reset on successful goal update
             except Exception as e:
                 self.get_logger().warn(f'Failed to update goals: {e}')
+                self.new_goal_available = False  # Reset to allow retry with new goal
+                self.mpc_failure_count += 1
 
         try:
             # Run MPC optimization
@@ -490,7 +500,7 @@ class MPCControlNode(Node):
 
             # Extract action
             if result.action_sequence is not None and result.action_sequence.position.shape[1] > 0:
-                next_position = result.action_sequence.position[:, -1, :]  # (1, 18)
+                next_position = result.action_sequence.position[:, -1, :]  # (1, 14)
                 next_velocity = result.action_sequence.velocity[:, -1, :]
 
                 # Update current state for next iteration
@@ -509,6 +519,10 @@ class MPCControlNode(Node):
                 # Right arm: indices 7-13
                 right_q = pos_np[7:14]
 
+                # Store last successful commands for hold mode
+                self.last_successful_commands['left'] = left_q
+                self.last_successful_commands['right'] = right_q
+
                 # Publish joint commands
                 self._publish_joint_commands(left_q, right_q)
 
@@ -523,8 +537,25 @@ class MPCControlNode(Node):
                     if self.recorder:
                         self.recorder.record_position_error(pos_err, pos_err)
 
+                # Reset failure count on success
+                self.mpc_failure_count = 0
+            else:
+                self.mpc_failure_count += 1
+                self.get_logger().warn(f'MPC returned None result, failure count: {self.mpc_failure_count}')
+
         except Exception as e:
-            self.get_logger().error(f'MPC control error: {e}')
+            self.mpc_failure_count += 1
+            self.get_logger().error(f'MPC control error (failure #{self.mpc_failure_count}): {e}')
+
+            # Try to recover from joint_states after multiple failures
+            if self.mpc_failure_count >= self.max_consecutive_failures:
+                self.get_logger().error('Too many MPC failures, attempting recovery from joint_states...')
+                if self._recover_from_joint_states():
+                    self.mpc_failure_count = 0
+                    self.get_logger().info('Recovery successful')
+                else:
+                    self.get_logger().error('Recovery failed, entering hold mode')
+                    self._publish_hold_command()
 
     def _publish_joint_commands(self, left_q, right_q):
         """Publish joint commands to ROS2.
@@ -548,6 +579,68 @@ class MPCControlNode(Node):
         right_msg.velocity = [0.0] * 7
         right_msg.effort = [0.0] * 7
         self.right_joint_pub.publish(right_msg)
+
+    def _publish_hold_command(self):
+        """Publish hold command (keep last known position) when MPC fails repeatedly."""
+        if self.last_successful_commands['left'] is not None:
+            left_msg = JointState()
+            left_msg.name = [f'mj_left_joint{i}' for i in range(1, 8)]
+            left_msg.position = self.last_successful_commands['left'].tolist()
+            left_msg.velocity = [0.0] * 7
+            left_msg.effort = [0.0] * 7
+            self.left_joint_pub.publish(left_msg)
+
+        if self.last_successful_commands['right'] is not None:
+            right_msg = JointState()
+            right_msg.name = [f'mj_right_joint{i}' for i in range(1, 8)]
+            right_msg.position = self.last_successful_commands['right'].tolist()
+            right_msg.velocity = [0.0] * 7
+            right_msg.effort = [0.0] * 7
+            self.right_joint_pub.publish(right_msg)
+
+    def _recover_from_joint_states(self) -> bool:
+        """Attempt to recover MPC state from /joint_states.
+
+        Returns:
+            True if recovery successful, False otherwise.
+        """
+        if len(self.current_joint_states_curobo) < 14:
+            self.get_logger().warn('Insufficient joint states for recovery')
+            return False
+
+        try:
+            # Extract joint positions in cuRobo order
+            joint_pos = []
+            for name in CUROBO_JOINT_ORDER:
+                if name not in self.current_joint_states_curobo:
+                    self.get_logger().warn(f'Missing joint for recovery: {name}')
+                    return False
+                joint_pos.append(self.current_joint_states_curobo[name])
+
+            # Create new state with correct shape
+            position_tensor = torch.tensor([joint_pos], dtype=torch.float32)
+
+            # Re-setup MPC with fresh state
+            new_state = CuRoboJointState.from_position(
+                position_tensor,
+                joint_names=self.mpc.joint_names,
+            )
+            new_state.velocity = torch.zeros_like(new_state.position)
+            new_state.acceleration = torch.zeros_like(new_state.position)
+
+            # Update current state
+            self.current_state = new_state
+
+            # Re-compute kinematics for goals
+            kin_result = self.mpc.compute_kinematics(self.current_state)
+            self.goal_poses = kin_result.tool_poses.to_dict()
+
+            self.get_logger().info('Successfully recovered MPC state from joint_states')
+            return True
+
+        except Exception as e:
+            self.get_logger().error(f'Recovery failed: {e}')
+            return False
 
     def shutdown(self):
         """Clean shutdown."""
