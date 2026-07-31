@@ -772,6 +772,16 @@ robot_cfg:
         - 0.08
         - 0.045
         radius: 0.022
+      - center:
+        - 0.110674
+        - 0.0
+        - 0.04386
+        radius: 0.034
+      - center:
+        - 0.072659
+        - 0.0
+        - 0.001474
+        radius: 0.032
       panda_left_hand:
       - center:
         - 0.0
@@ -863,6 +873,16 @@ robot_cfg:
         - 0.08
         - 0.045
         radius: 0.022
+      - center:
+        - 0.110674
+        - 0.0
+        - 0.04386
+        radius: 0.034
+      - center:
+        - 0.072659
+        - 0.0
+        - 0.001474
+        radius: 0.032
       panda_right_leftfinger:
       - center:
         - 0.0
