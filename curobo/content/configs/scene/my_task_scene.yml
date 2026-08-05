@@ -5,11 +5,16 @@
 ##
 ## Simple test environment with a few obstacles
 ##
-## Total static objects: 1 (movable objects excluded)
+## Total static objects: 2 (movable objects excluded)
 
 cuboid:
 
-  ## box_01: Box, dims=[0.3, 0.4, 1.0]
+  ## box_01: Box, dims=[0.2, 0.2, 0.04]
   box_01:
-    dims: [0.3, 0.4, 1.0]  # x, y, z dimensions
-    pose: [0.700, 0.000, 0.500, 1.000, 0.000, 0.000, 0.000]
+    dims: [0.2, 0.2, 0.04]  # x, y, z dimensions
+    pose: [0.450, 0.000, 0.200, 1.000, 0.000, 0.000, 0.000]
+
+  ## box_02: Box, dims=[0.4, 1.0, 0.04]
+  box_02:
+    dims: [0.4, 1.0, 0.04]  # x, y, z dimensions
+    pose: [0.800, 0.000, 0.500, 1.000, 0.000, 0.000, 0.000]
