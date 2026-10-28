@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-"""GPU data storage and SDF functions for cuboid (OBB) obstacles.
+"""GPU data storage and exact SDFs for boxes, spheres and finite cylinders.
+
+The historical CuboidData name/cache key is retained for compatibility. The
+fourth dimension component is a primitive tag: 0=box, 1=sphere, 2=cylinder.
+Parameters are full XYZ extents for boxes, [radius, 0, 0] for spheres, and
+[radius, full_height, 0] for cylinders (local Z axis). No bounding-box conversion
+is performed. Both regular and swept collision kernels use these SDFs.
 
 This module provides:
 - CuboidData: Python dataclass owning GPU tensors
@@ -14,6 +20,7 @@ This module provides:
 
 # Standard Library
 from dataclasses import dataclass
+import math
 from typing import List, Optional
 
 # Third Party
@@ -25,10 +32,30 @@ from curobo._src.geom.data.helper_pose import (
     get_obs_idx,
     load_transform_from_inv_pose,
 )
-from curobo._src.geom.types import Cuboid, SceneCfg, batch_tensor_cube
+from curobo._src.geom.types import Cuboid, Sphere, Cylinder, SceneCfg, batch_tensor_cube
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.util.logging import log_and_raise
+
+# Feature flag for applications that require analytic rather than mesh/OBB geometry.
+ANALYTIC_PRIMITIVES = True
+
+
+def primitive_parameters(obstacle):
+    """Pack shape parameters, preserving MuJoCo radius/full-height conventions."""
+    if isinstance(obstacle, Sphere):
+        if not math.isfinite(obstacle.radius) or obstacle.radius <= 0:
+            raise ValueError("Sphere radius must be positive")
+        return [obstacle.radius, 0., 0.], 1
+    if isinstance(obstacle, Cylinder):
+        if (not math.isfinite(obstacle.radius) or not math.isfinite(obstacle.height)
+                or obstacle.radius <= 0 or obstacle.height <= 0):
+            raise ValueError("Cylinder radius and height must be positive")
+        return [obstacle.radius, obstacle.height, 0.], 2
+    if isinstance(obstacle, Cuboid):
+        return obstacle.dims, 0
+    raise TypeError(f"Unsupported analytic obstacle: {type(obstacle)}")
+
 
 # =============================================================================
 # Python Dataclass
@@ -45,7 +72,7 @@ class CuboidDataWarp:
     """Warp struct for cuboid obstacle data.
 
     Attributes:
-        dims: Full extents [x_length, y_length, z_length, pad]. Shape: (num_envs * max_n, 4).
+        dims: Primitive parameters [a, b, c, kind]. Shape: (num_envs * max_n, 4).
             Note: SDF functions divide by 2 at runtime to get half_extents.
         inv_pose: Inverse pose [x, y, z, qw, qx, qy, qz, pad]. Shape: (num_envs * max_n, 8).
         enable: Enable flag per cuboid. 1 = active, 0 = disabled.
@@ -65,21 +92,21 @@ class CuboidDataWarp:
 
 @dataclass
 class CuboidData:
-    """GPU tensor storage for cuboid (oriented bounding box) obstacles.
+    """GPU tensor storage for analytic box, sphere and cylinder obstacles.
 
-    This dataclass owns the GPU tensor buffers for cuboid obstacles and provides
+    This dataclass owns the shared GPU tensor buffers for analytic obstacles and provides
     methods for adding, updating, and querying cuboids. It can be shared between
     multiple consumers (collision checker, TSDF integrator, visualization) to
     avoid duplicate GPU allocations and ensure synchronized pose updates.
 
     Tensor layouts:
-        - dims: (num_envs, max_n, 4) - full extents [x, y, z, pad]
+        - dims: (num_envs, max_n, 4) - primitive parameters [a, b, c, kind]
         - inv_pose: (num_envs, max_n, 8) - inverse pose [x, y, z, qw, qx, qy, qz, pad]
         - enable: (num_envs, max_n) - uint8 flags
         - count: (num_envs,) - int32 active counts
     """
 
-    #: Full dimensions [x_length, y_length, z_length] with padding.
+    #: Primitive parameters and kind tag; see module docstring.
     dims: torch.Tensor
 
     #: Inverse pose [x, y, z, qw, qx, qy, qz] with padding.
@@ -132,6 +159,7 @@ class CuboidData:
             )
             + 0.01  # Small default to avoid zero-size cuboids
         )
+        dims[..., 3] = 0.0  # Default cache entries are boxes.
         inv_pose = torch.zeros(
             (num_envs, max_n, 8),
             dtype=device_cfg.dtype,
@@ -175,7 +203,7 @@ class CuboidData:
         Returns:
             CuboidData populated with cuboids from the scene config.
         """
-        cuboids = scene_cfg.cuboid
+        cuboids = scene_cfg.get_analytic_obstacles()
         num_cuboids = len(cuboids) if cuboids else 0
 
         if max_n is None:
@@ -208,7 +236,7 @@ class CuboidData:
             CuboidData populated with cuboids from all scene configs.
         """
         num_envs = len(scene_cfg_list)
-        cuboid_counts = [len(cfg.cuboid) if cfg.cuboid else 0 for cfg in scene_cfg_list]
+        cuboid_counts = [len(cfg.get_analytic_obstacles()) for cfg in scene_cfg_list]
 
         if max_n is None:
             max_n = max(cuboid_counts) if cuboid_counts else 1
@@ -216,8 +244,8 @@ class CuboidData:
         instance = cls.create_cache(max_n, num_envs, device_cfg)
 
         for env_idx, scene_cfg in enumerate(scene_cfg_list):
-            if scene_cfg.cuboid:
-                instance.load_batch(scene_cfg.cuboid, env_idx)
+            if scene_cfg.get_analytic_obstacles():
+                instance.load_batch(scene_cfg.get_analytic_obstacles(), env_idx)
 
         return instance
 
@@ -244,12 +272,14 @@ class CuboidData:
             return
 
         pose_batch = [c.pose for c in cuboids]
-        dims_batch = [c.dims for c in cuboids]
+        packed = [primitive_parameters(c) for c in cuboids]
+        dims_batch = [v[0] for v in packed]
         names_batch = [c.name for c in cuboids]
 
         cube_tensors = batch_tensor_cube(pose_batch, dims_batch, self.device_cfg)
 
         self.dims[env_idx, :num_cuboids, :3] = cube_tensors[0]
+        self.dims[env_idx, :num_cuboids, 3] = self.device_cfg.to_device([v[1] for v in packed])
         self.inv_pose[env_idx, :num_cuboids, :7] = cube_tensors[1]
         self.enable[env_idx, :num_cuboids] = 1
         self.enable[env_idx, num_cuboids:] = 0
@@ -269,9 +299,11 @@ class CuboidData:
         Raises:
             RuntimeError: If cache is full or name already exists.
         """
+        params, kind = primitive_parameters(cuboid)
         return self.add_from_raw(
             name=cuboid.name,
-            dims=self.device_cfg.to_device(cuboid.dims),
+            dims=self.device_cfg.to_device(params),
+            primitive_kind=kind,
             w_obj_pose=Pose.from_list(cuboid.pose, self.device_cfg),
             env_idx=env_idx,
         )
@@ -283,6 +315,7 @@ class CuboidData:
         env_idx: int,
         w_obj_pose: Optional[Pose] = None,
         obj_w_pose: Optional[Pose] = None,
+        primitive_kind: int = 0,
     ) -> int:
         """Add a cuboid using raw tensor inputs.
 
@@ -313,6 +346,7 @@ class CuboidData:
             obj_w_pose = w_obj_pose.inverse()
 
         self.dims[env_idx, current_count, :3] = dims
+        self.dims[env_idx, current_count, 3] = primitive_kind
         self.inv_pose[env_idx, current_count, :7] = obj_w_pose.get_pose_vector()
         self.enable[env_idx, current_count] = 1
         self.names[env_idx][current_count] = name
@@ -502,6 +536,44 @@ def load_obstacle_transform(
     return load_transform_from_inv_pose(obs_set.inv_pose, flat_idx)
 
 
+@wp.func
+def sphere_sdf_with_grad(p: wp.vec3, radius: wp.float32) -> wp.vec4:
+    length = wp.length(p)
+    # As with the box overload, gradient is of penetration (-SDF).
+    grad = wp.vec3(-1.0, 0.0, 0.0)
+    if length > 1.0e-8:
+        grad = -p / length
+    return wp.vec4(length - radius, grad[0], grad[1], grad[2])
+
+
+@wp.func
+def cylinder_sdf_with_grad(p: wp.vec3, radius: wp.float32, height: wp.float32) -> wp.vec4:
+    radial = wp.sqrt(p[0] * p[0] + p[1] * p[1])
+    dr = radial - radius
+    dz = wp.abs(p[2]) - 0.5 * height
+    cr = wp.max(dr, 0.0)
+    cz = wp.max(dz, 0.0)
+    outside = wp.sqrt(cr * cr + cz * cz)
+    sdf = outside + wp.min(wp.max(dr, dz), 0.0)
+    gr = wp.float32(0.0)
+    gz = wp.float32(0.0)
+    if outside > 1.0e-8:
+        gr = -cr / outside
+        gz = -cz / outside
+    elif dr >= dz:
+        gr = -1.0
+    else:
+        gz = -1.0
+    ux = wp.float32(1.0)
+    uy = wp.float32(0.0)
+    if radial > 1.0e-8:
+        ux = p[0] / radial
+        uy = p[1] / radial
+    if p[2] < 0.0:
+        gz = -gz
+    return wp.vec4(sdf, gr * ux, gr * uy, gz)
+
+
 def compute_local_sdf(
     obs_set: CuboidDataWarp,
     env_idx: wp.int32,
@@ -524,6 +596,12 @@ def compute_local_sdf(
         Signed distance: negative inside, positive outside.
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+
+    kind = obs_set.dims[flat_idx, 3]
+    if kind == 1.0:
+        return sphere_sdf_with_grad(local_pt, obs_set.dims[flat_idx, 0])[0]
+    if kind == 2.0:
+        return cylinder_sdf_with_grad(local_pt, obs_set.dims[flat_idx, 0], obs_set.dims[flat_idx, 1])[0]
 
     # Load half-extents as scalars (avoid vec3 construction)
     hx = obs_set.dims[flat_idx, 0] * 0.5
@@ -570,6 +648,12 @@ def compute_local_sdf_with_grad(
         vec4(signed_dist, grad_local_x, grad_local_y, grad_local_z).
     """
     flat_idx = get_obs_idx(env_idx, local_idx, obs_set.max_n)
+
+    kind = obs_set.dims[flat_idx, 3]
+    if kind == 1.0:
+        return sphere_sdf_with_grad(local_pt, obs_set.dims[flat_idx, 0])
+    if kind == 2.0:
+        return cylinder_sdf_with_grad(local_pt, obs_set.dims[flat_idx, 0], obs_set.dims[flat_idx, 1])
 
     # Load half-extents as scalars (avoid vec3 construction)
     hx = obs_set.dims[flat_idx, 0] * 0.5

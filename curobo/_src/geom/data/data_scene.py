@@ -21,7 +21,7 @@ import warp as wp
 from curobo._src.geom.data.data_cuboid import CuboidData, CuboidDataWarp
 from curobo._src.geom.data.data_mesh import MeshData, MeshDataWarp
 from curobo._src.geom.data.data_voxel import VoxelData, VoxelDataWarp
-from curobo._src.geom.types import Cuboid, Mesh, Obstacle, SceneCfg, VoxelGrid
+from curobo._src.geom.types import Cuboid, Sphere, Cylinder, Mesh, Obstacle, SceneCfg, VoxelGrid
 from curobo._src.types.device_cfg import DeviceCfg
 from curobo._src.types.pose import Pose
 from curobo._src.util.logging import log_and_raise
@@ -164,8 +164,8 @@ class SceneData:
         voxels = None
 
         # Handle cuboids
-        if scene_cfg.cuboid and len(scene_cfg.cuboid) > 0:
-            max_cuboids = cuboid_cache or len(scene_cfg.cuboid)
+        if scene_cfg.get_analytic_obstacles():
+            max_cuboids = cuboid_cache or len(scene_cfg.get_analytic_obstacles())
             cuboids = CuboidData.from_scene_cfg(
                 scene_cfg, device_cfg, env_idx, num_envs, max_cuboids
             )
@@ -233,7 +233,7 @@ class SceneData:
         voxels = None
 
         # Check if any scene has cuboids
-        cuboid_counts = [len(cfg.cuboid) if cfg.cuboid else 0 for cfg in scene_cfg_list]
+        cuboid_counts = [len(cfg.get_analytic_obstacles()) for cfg in scene_cfg_list]
         if max(cuboid_counts) > 0 or (cuboid_cache is not None and cuboid_cache > 0):
             cuboids = CuboidData.from_batch_scene_cfg(scene_cfg_list, device_cfg, cuboid_cache)
 
@@ -285,7 +285,7 @@ class SceneData:
         Raises:
             ValueError: If obstacle type is not supported or cache not initialized.
         """
-        if isinstance(obstacle, Cuboid):
+        if isinstance(obstacle, (Cuboid, Sphere, Cylinder)):
             if self.cuboids is None:
                 log_and_raise("Cuboid cache not initialized")
             return self.cuboids.add(obstacle, env_idx)
@@ -432,8 +432,8 @@ class SceneData:
         if store_reference:
             self.scene_model = scene_cfg
         self.clear(env_idx)
-        if scene_cfg.cuboid:
-            for cuboid in scene_cfg.cuboid:
+        if scene_cfg.get_analytic_obstacles():
+            for cuboid in scene_cfg.get_analytic_obstacles():
                 self.add_obstacle(cuboid, env_idx)
         if scene_cfg.mesh:
             for mesh in scene_cfg.mesh:

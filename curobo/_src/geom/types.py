@@ -1054,25 +1054,12 @@ class SceneCfg(Sequence):
             SceneCfg: World configuration with all obstacles converted to supported collision
                 types.
         """
-        sphere_obb = []
-        capsule_obb = []
-        cuboid_obb = []
-        cylinder_obb = []
-        if current_world.capsule is not None and len(current_world.capsule) > 0:
-            capsule_obb = [x.get_mesh(process=process) for x in current_world.capsule]
-
-        if current_world.sphere is not None and len(current_world.sphere) > 0:
-            sphere_obb = [x.get_mesh(process=process) for x in current_world.sphere]
-
-        if current_world.cuboid is not None and len(current_world.cuboid) > 0:
-            cuboid_obb = current_world.cuboid
-
-        if current_world.cylinder is not None and len(current_world.cylinder) > 0:
-            cylinder_obb = [x.get_mesh(process=process) for x in current_world.cylinder]
-
+        capsules = [x.get_mesh(process=process) for x in current_world.capsule]
         return SceneCfg(
-            mesh=current_world.mesh + sphere_obb + capsule_obb + cylinder_obb,
-            cuboid=cuboid_obb,
+            mesh=current_world.mesh + capsules,
+            cuboid=current_world.cuboid,
+            sphere=current_world.sphere,
+            cylinder=current_world.cylinder,
             voxel=current_world.voxel,
         )
 
@@ -1157,9 +1144,13 @@ class SceneCfg(Sequence):
 
         mesh_scene.export(file_path)
 
+    def get_analytic_obstacles(self) -> List[Obstacle]:
+        """Primitives evaluated with exact SDFs in the shared primitive cache."""
+        return self.cuboid + self.sphere + self.cylinder
+
     def get_cache_dict(self) -> Dict[str, int]:
         """Computes the number of obstacles in each type."""
-        cache = {"obb": len(self.cuboid), "mesh": len(self.mesh)}
+        cache = {"obb": len(self.get_analytic_obstacles()), "mesh": len(self.mesh)}
         return cache
 
     def add_obstacle(self, obstacle: Obstacle):
